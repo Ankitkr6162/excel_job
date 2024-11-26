@@ -1,0 +1,191 @@
+package webemr.analytics.cmsdata.dao;
+
+import catalog.Root;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import webemr.analytics.base.dao.AbstractAnalyticsBaseDao;
+import webemr.analytics.cmsdata.constants.ExcelConstants;
+import webemr.analytics.cmsdata.constants.ExcelQueryConstant;
+import webemr.analytics.cmsdata.exception.InvalidExcelException;
+import webemr.analytics.cmsdata.model.CMS;
+import webemr.analytics.cmsdata.model.CMSData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+public class ExcelToTableDao extends AbstractAnalyticsBaseDao {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ExcelToTableDao.class);
+
+    private static final String LOINC_CODE_SYSTEM = ExcelConstants.LOINC_CODE_SYSTEM;
+
+    public List<CMS> getCMSList() {
+        LOGGER.info("Starting method execution : getCMSList");
+        PreparedStatement preparedStatement=null;
+        ResultSet resultSet = null;
+        List<CMS> cmsList = new ArrayList<>();
+        String query;
+        try {
+            query = ExcelQueryConstant.GET_ALL_CMS_LIST_DATA;
+            preparedStatement = getConnection().con.prepareStatement(query);
+            resultSet = preparedStatement.executeQuery();
+            while (resultSet.next()) {
+                CMS cms = new CMS();
+                cms.setCategoryId(resultSet.getInt(ExcelConstants.COLUMN_CATEGORY_ID));
+                cms.setCmsName(resultSet.getString(ExcelConstants.COLUMN_CMS_NAME));
+                cmsList.add(cms);
+            }
+        }catch (Exception e) {
+            LOGGER.error(e.getMessage(),e);
+        }finally {
+            Root.EcwCloseResultSet(resultSet);
+            Root.EcwClosePreparedStatement(preparedStatement);
+        }
+        LOGGER.info("Completed method execution : getCMSList");
+        return cmsList;
+    }
+
+    private void deleteData() {
+        LOGGER.info("Starting method execution : deleteData");
+        PreparedStatement preparedStatement = null;
+        String query = ExcelQueryConstant.DELETE_DL_CUBE_CMS_DATA;
+        try {
+            preparedStatement = getConnection().con.prepareStatement(query);
+            preparedStatement.execute();
+        } catch (Exception e) {
+            LOGGER.error(e.getMessage(),e);
+        } finally {
+            Root.EcwClosePreparedStatement(preparedStatement);
+        }
+        LOGGER.info("Completed method execution : deleteData");
+    }
+
+    public Boolean insertInBatchCMSData(Map<String, List<CMSData>> cmsDataMap, List<CMS> cmsList){
+        LOGGER.info("Starting method execution : insertInBatchCMSData");
+        boolean result = false;
+        try {
+            deleteData();
+            String cmsDataQuery = ExcelQueryConstant.INSERT_DL_CUBE_CMS_DATA;
+            try(PreparedStatement preparedStatement = getConnection().con.prepareStatement(cmsDataQuery)){
+                for (CMS cms : cmsList) {
+                    if (null != cmsDataMap.get(cms.getCmsName())) {
+                        cmsDataMap.get(cms.getCmsName()).forEach(cmsData -> addCMSDataBatch(cmsData,cms,preparedStatement));
+                    }
+                    int[] resultValues = preparedStatement.executeBatch();
+                    if(resultValues.length > 0){
+                        result = true;
+                    }
+                }
+            }
+            LOGGER.info("Completed method execution : insertInBatchCMSData");
+            return result;
+        }catch(Exception e) {
+            throw new InvalidExcelException(e.getMessage());
+        }
+    }
+
+    private void addCMSDataBatch(CMSData cmsData,CMS cms,PreparedStatement preparedStatement){
+        try{
+            int index = 1;
+            preparedStatement.setInt(index++, cms.getCategoryId());
+            preparedStatement.setString(index++, cmsData.getcMSID());
+            preparedStatement.setString(index++, cmsData.getValueSetName());
+            preparedStatement.setString(index++, cmsData.getqDMCategory());
+            preparedStatement.setString(index++, cmsData.getCode());
+            preparedStatement.setString(index++, cmsData.getDescription());
+            preparedStatement.setString(index++, cmsData.getCodeSystem());
+            preparedStatement.setObject(index++, cmsData.getItemId());
+            preparedStatement.setTimestamp(index,new Timestamp(System.currentTimeMillis()));
+            preparedStatement.addBatch();
+        }catch(SQLException exception){
+            LOGGER.error(exception.getMessage(),exception);
+        }
+    }
+
+    private void deleteAllData(){
+        LOGGER.info("Starting method execution : deleteAllData");
+        PreparedStatement oPrStmtdeleteData = null;
+        PreparedStatement oPrStmtdeleteCategory = null;
+        String deleteQuery;
+
+        try {
+            deleteQuery = ExcelQueryConstant.DELETE_DL_CUBE_CMS_DATA;
+            oPrStmtdeleteData = getConnection().con.prepareStatement(deleteQuery);
+            oPrStmtdeleteData.executeUpdate();
+
+            deleteQuery = ExcelQueryConstant.DELETE_DJ_CTL_CMS;
+            oPrStmtdeleteCategory = getConnection().con.prepareStatement(deleteQuery);
+            oPrStmtdeleteCategory.executeUpdate();
+
+        } catch (Exception e) {
+            LOGGER.error(e.getMessage(),e);
+        } finally {
+            Root.EcwClosePreparedStatement(oPrStmtdeleteData);
+            Root.EcwClosePreparedStatement(oPrStmtdeleteCategory);
+        }
+        LOGGER.info("Completed method execution : deleteAllData");
+    }
+
+    public void insertCategoriesData(Map<String, List<CMSData>> cmsDataMap) {
+        LOGGER.info("Starting method execution : insertCategoriesData");
+        PreparedStatement oPrStmtUpdate = null;
+        String insertquery;
+
+        try {
+            deleteAllData();
+            insertquery = ExcelQueryConstant.INSERT_DJ_CTL_CMS_DATA;
+            oPrStmtUpdate = getConnection().con.prepareStatement(insertquery);
+            int count=1;
+            for(Map.Entry<String,List<CMSData>> entry: cmsDataMap.entrySet()){
+                oPrStmtUpdate.setInt(1,count);
+                oPrStmtUpdate.setString(2,entry.getKey());
+                count++;
+                oPrStmtUpdate.addBatch();
+            }
+
+            oPrStmtUpdate.executeBatch();
+
+        } catch (Exception e) {
+            LOGGER.error(e.getMessage(),e);
+        } finally {
+            Root.EcwClosePreparedStatement(oPrStmtUpdate);
+        }
+        LOGGER.info("Completed method execution : insertCategoriesData");
+    }
+
+    public List<Integer> getItemIdsForCode(CMSData cmsData){
+        LOGGER.info("Starting method execution : getItemIdsForCode");
+        PreparedStatement oPrStmtSelect = null;
+        List<Integer> lstItemIds= new ArrayList<>();
+
+        String selectQuery=ExcelQueryConstant.GET_ITEMID_FROM_ITEMDETAIL;
+        if(LOINC_CODE_SYSTEM.equalsIgnoreCase(cmsData.getCodeSystem())){
+            selectQuery=ExcelQueryConstant.GET_ITEMID_FROM_LABLOINCCODES_AND_LOINICCODES;
+        }
+
+        ResultSet resultSet =null;
+        try {
+            oPrStmtSelect = getConnection().con.prepareStatement(selectQuery);
+            oPrStmtSelect.setString(1,cmsData.getCode());
+            if(LOINC_CODE_SYSTEM.equalsIgnoreCase(cmsData.getCodeSystem())) {
+                oPrStmtSelect.setString(2, cmsData.getCode());
+            }
+            resultSet=oPrStmtSelect.executeQuery();
+            while (resultSet.next()){
+                lstItemIds.add(resultSet.getInt(ExcelConstants.COLUMN_ITEM_ID));
+            }
+        } catch (Exception e) {
+            LOGGER.error(e.getMessage(),e);
+        } finally {
+            Root.EcwClosePreparedStatement(oPrStmtSelect);
+            Root.EcwCloseResultSet(resultSet);
+        }
+        LOGGER.info("Completed method execution : getItemIdsForCode");
+        return lstItemIds;
+    }
+
+}
